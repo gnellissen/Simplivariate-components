@@ -1,0 +1,354 @@
+##Main function, GA SC
+GA_SC <- function(df, num_generations = 500, pop_size = 100, mutation_ratio = 0.01,
+                  selection_ratio = 0.5, zero_ratio = 0.5, elitism = 2,
+                  cross_over = "uniform", cluster_types, iters = 10, stop_pval = 0.01){
+
+  #Create heatmap
+  heatmap.2(df,dendrogram='none', Rowv=FALSE, Colv=FALSE,trace='none')
+  
+  #Create empty variables
+  cluster_result <- c()
+  GA_list <- vector("list")
+  
+  for (x in 1:iters){
+    #Create an empty matrix to create the search space graph later
+    df_graph <<- matrix(0,rows,cols)
+    
+    #Run the genetic algorithm
+    res <- Gen_Alg(df,num_generations, pop_size, mutation_ratio, selection_ratio, zero_ratio, elitism, cross_over, cluster_types)
+    
+    #Use the function p_vals to select the best cluster
+    p_vals <- p_values(df, indices)
+    print(p_vals) #print the output
+    
+    #Stop if no significant SC was found
+    if (min(p_vals) > stop_pval){
+      cat(length(cluster_result)/2, "SC(s) were found", "\n")
+      break 
+    }
+    
+    #Select the SC with the lowest p_value
+    best_clust <- which.min(p_vals)
+    
+    #Show graph of the search space of the algorithm
+    heatmap.2(df_graph,dendrogram='none', Rowv=FALSE, Colv=FALSE,trace='none')
+    
+    #Save SC that will be removed
+    cluster_result <- c(cluster_result, list(which(indices[[1]] == best_clust),which(indices[[2]] == best_clust)))
+    GA_list[[x]] <- df[indices[[1]] == best_clust, indices[[2]] == best_clust]
+    
+    #Remove the SC from the matrix and replace with artificial noise
+    df[indices[[1]] == best_clust, indices[[2]] == best_clust] <- rnorm(length(df[indices[[1]] == best_clust, indices[[2]] == best_clust]),median(df),sd(df))
+    
+    #Create new heatmap after SC removal
+    heatmap.2(df,dendrogram='none', Rowv=FALSE, Colv=FALSE,trace='none')
+    
+  }
+  
+  return(GA_list)
+}
+
+## Fitness function of the GA
+# solution = solution string from GA
+# clusters = number of clusters 
+fitness <- function(solution, clusters = 6) {
+  
+  #Split solution into row (solx) and columns (soly)
+  solx <- solution[1:cols]
+  soly <- solution[(cols+1):(cols+rows)]
+  
+  #Look only at clusters larger than 2X2
+  if (any(sapply(1:clusters, function(i) length(solx[solx == i]) < 2)) ||
+      any(sapply(1:clusters, function(i) length(soly[soly == i]) < 2))) {
+    return(Inf)
+  }
+  
+  # Initialize result
+  result <- 0
+  
+  # Evaluate each cluster in the solution
+  for(i in 1:clusters) {
+    # Subset df based on solx and soly
+    res <- df[soly == i, solx == i]
+    
+    #Update search space graph
+    df_graph[soly == i, solx == i] <<- df_graph[soly == i, solx == i] + 1
+    
+    if (cluster_types[i] == "constant") {
+      # Calculate fitness for constant SCs
+      result <- result + sum(abs(df_var[soly == i, solx == i])) - sum(abs(res - mean(res)))
+    }
+    
+    if (cluster_types[i] == "shifting") {
+      # Calculate fitness for additive SCs
+      result <- result + sum(abs(df_var[soly == i, solx == i])) - sum(abs(res - shift_matrix(res)))
+    }
+    
+    if (cluster_types[i] == "scaling") {
+      # Calculate fitness for multiplicative SCs
+      result <- result + sum(abs(df_var[soly == i, solx == i])) - sum(abs(res - scale_matrix(res)))
+    }
+  }
+  
+  return(-result)
+}
+
+
+# Models ------------------------------------------------------------------
+## Function to generate an additive representation of the found SC
+shift_matrix <- function(df){
+  
+  col_means <- colMeans(df)
+  row_means <- rowMeans(df)
+  mean <- mean(df)
+  
+  df <- matrix(mean,nrow(df),ncol(df))
+  df <- df - row_means
+  df <- t(df) - col_means
+  return(-t(df))
+}
+
+## Function to generate a multiplicative representation of the found SC
+scale_matrix <- function(df){
+  
+  col_means <- colMeans(df)
+  row_means <- rowMeans(df)
+  mean <- mean(df)
+  
+  df <- matrix(1,nrow(df),ncol(df))
+  df <- df*row_means
+  df <- t(df)*col_means
+  df <- df/mean
+  return(t(df))
+}
+
+# Genetic algorithm -----------------------------------------------------------
+Gen_Alg <- function(df,num_generations, pop_size, mutation_ratio, selection_ratio, zero_ratio, elitism, cross_over = "two-point", cluster_types, result = "indices"){
+  #Create a centered matrix
+  df_var <<- df - mean(df) #mean(df) is 0 if data is autoscaled
+  best <- c()
+  
+  #Size of solutions
+  solution_size <- nrow(df)+ncol(df)
+  
+  # Compute the number of 0's and 1's to use in the initial population
+  num_zeros <- round(pop_size * solution_size * zero_ratio)
+  num_ones <- pop_size * solution_size - num_zeros
+  
+  # Initialize the population with the desired ratio of 0's.
+  population <- c(rep(0, num_zeros))
+  
+  #Initialize number of clusters
+  clusters <- length(cluster_types)
+  
+  # Add additional cluster indices
+  prop <- (1/clusters)
+  cluster_indices <- c(1:clusters)
+  population_int <- c(population, unlist(lapply(cluster_indices, function(i) rep(cluster_indices[i], round(num_ones*prop)))))
+  
+  # Create a population matrix, based on population size and solution size
+  population <- matrix(sample(population_int, pop_size * solution_size, replace = TRUE),ncol = solution_size)
+  
+  # Run the genetic algorithm for a number of generations
+  for (gen in 1:num_generations) {
+    
+    # Evaluate the fitness of each solution in the population
+    fitness_scores <- apply(population, 1, fitness, clusters = clusters)
+    best <- rbind(best, c(min(fitness_scores), gen))
+    
+    # Select the top solutions for reproduction
+    top_indices <- order(fitness_scores)[1:(pop_size*selection_ratio)]
+    top_solutions <- population[top_indices,]
+    
+    # Recombination ----------------------------------------------------------------
+    # Create new solutions by recombination
+    new_solutions <- matrix(nrow=pop_size, ncol=solution_size)
+    
+    #Elitism: the best solutions move on to the next population without cross over
+    new_solutions[1:elitism,] <- top_solutions[1:elitism,] 
+    
+    for (i in ((1+elitism):pop_size)) {
+      parent1 <- top_solutions[sample(1:(pop_size*selection_ratio), size=1),]
+      parent2 <- top_solutions[sample(1:(pop_size*selection_ratio), size=1),]
+      
+      if(cross_over == "two-point"){
+        #Calculate cross points
+        cross_point_x <- c(round(cols*0.33),round(cols*0.66))
+        cross_point_y <- c(round(rows*0.33),round(rows*0.66))
+        
+        #Change columns
+        new_solutions[i,1:cols] <- two_point_crossover(parent1[1:cols],parent2[1:cols], cross_point_x)
+        #Change rows
+        new_solutions[i,(cols+1):(cols+rows)] <- two_point_crossover(parent1[(cols+1):(cols+rows)],parent2[(cols+1):(cols+rows)], cross_point_y)
+      }
+      
+      if(cross_over == "uniform"){
+        #Change columns
+        new_solutions[i,1:cols] <- ifelse(runif(cols) < 0.5, parent1[1:cols], parent2[1:cols])
+        #Change rows
+        new_solutions[i,(cols+1):(cols+rows)] <- ifelse(runif(rows) < 0.5, parent1[(cols+1):(cols+rows)], parent2[(cols+1):(cols+rows)])
+      }
+      
+      if(cross_over == "n-point"){
+        #Change columns
+        new_solutions[i,1:cols] <- n_point_crossover(parent1[1:cols],parent2[1:cols],sample(2:10,1))
+        #Change rows
+        new_solutions[i,(cols+1):(cols+rows)] <- n_point_crossover(parent1[(cols+1):(cols+rows)],parent2[(cols+1):(cols+rows)], sample(2:10,1))
+      }
+    }
+    
+    # Mutation ---------------------------------------------------------------------
+    # Mutate some parts of the solutions
+    for (i in ((1+elitism):pop_size)) {
+      for (j in 1:solution_size) {
+        if (runif(1) < mutation_ratio) {
+          new_solutions[i,j] <- sample(c(0:clusters), 1)
+        }
+      }
+    }
+    
+    # Replace the old population with the new solutions
+    population <- new_solutions
+  }
+  
+  
+  # Find the best solution
+  fitness_scores <- apply(population, 1, fitness)
+  best_index <- which.min(fitness_scores)
+  best_solution <- population[best_index,]
+  best_fitness <- fitness_scores[best_index]
+  
+  solx <- best_solution[1:cols]
+  soly <- best_solution[(cols+1):(cols+rows)]
+  
+  #Plot fitness across generations
+  best[best>0] <- 1
+  plot(log(abs((as.numeric(best[,1])))))
+  
+  #Return either the entire matrix or just in the row and column indices
+  if (result == "cluster") {solutions <- lapply(1:clusters, function(x) df[soly == x, solx == x])}
+  if (result == "indices") {solutions <- list(solx,soly)}
+  
+  #Save indices to global environment (TEMPORARY!)
+  indices <<- list(soly,solx)
+  
+  return(solutions)
+  
+}
+
+# Cross over --------------------------------------------------------------
+# define the crossover function
+two_point_crossover <- function(parent1, parent2, cross_points) {
+  # get the length of the parents
+  n <- length(parent1)
+  # sort the cross points in ascending order
+  cross_points <- sort(cross_points)
+  # initialize the offspring
+  offspring <- numeric(n)
+  # set the first and last segments of the offspring to the corresponding segments of the parents
+  offspring[1:cross_points[1]] <- parent1[1:cross_points[1]]
+  offspring[(cross_points[2]+1):n] <- parent1[(cross_points[2]+1):n]
+  # set the middle segment of the offspring to the corresponding segment of parent2
+  offspring[(cross_points[1]+1):cross_points[2]] <- parent2[(cross_points[1]+1):cross_points[2]]
+  return(offspring)
+}
+
+n_point_crossover <- function(parent1, parent2, n) {
+  # randomly select n points in the chromosome
+  points <- sort(sample(length(parent1), n))
+  
+  # initialize offspring
+  offspring <- numeric(length(parent1))
+  
+  # alternate copying between parents at each crossover point
+  current_parent <- 1
+  for (i in 1:length(parent1)) {
+    if (i %in% points) {
+      current_parent <- ifelse(current_parent == 1, 2, 1)
+    }
+    if (current_parent == 1) {
+      offspring[i] <- parent1[i]
+    } else {
+      offspring[i] <- parent2[i]
+    }
+  }
+  
+  return(offspring)
+}
+
+
+# F-tests -----------------------------------------------------------------
+#indices = solution string from GA
+p_values <- function(df, indices){
+  
+  #Set up lists
+  res <- c()
+  clust_types <- c()
+  
+  #Calculate number of SCs in indices (minus 1 since 0 is included)
+  clusters <- length(unique(indices[[1]]))-1
+  
+  #Loop across all SCs in solution
+  for (i in 1:clusters){
+    p_res <- c()
+    
+    #Define the SC
+    cluster <- df[indices[[1]] == i, indices[[2]] == i]
+    
+    #Constant model ------------------------------------------------------------
+    #Calculate RSS and model df
+    RSS_model1 <- sum((cluster - mean(df))^2) #If data is autoscaled mean(df) = 0
+    df_model1 <- 1
+    RSS_model2 <- sum((cluster - mean(cluster))^2)
+    df_model2 <- 2
+    
+    #Calculate F_value
+    F_val <- ((RSS_model1 - RSS_model2) / (df_model2 - df_model1)) / (RSS_model2 / (df_model2))
+    
+    #Calculate p-value
+    p_val <- pf(F_val, df_model2-df_model1, df_model2, lower.tail = FALSE)
+    p_res <- c(p_res, p_val)
+    
+    #Additive model ------------------------------------------------------------
+    #Calculate RSS and df 
+    RSS_model1 <- sum((mean(cluster)-cluster)^2) #If data is autoscaled mean(df) = 0
+    df_model1 <- 1
+    RSS_model2 <- sum((shift_matrix(cluster) - cluster)^2)
+    df_model2 <- nrow(cluster) + ncol(cluster) - 1
+    
+    #Calculate F_value
+    F_val <- ((RSS_model1 - RSS_model2) / (df_model2 - df_model1)) / (RSS_model2 / (df_model2))
+    
+    #Calculate p-value
+    p_val <- pf(F_val, df_model2-df_model1, df_model2, lower.tail = FALSE)
+    p_res <- c(p_res, p_val)
+    
+    
+    #Multiplicative model ------------------------------------------------------
+    #Calculate RSS and df 
+    RSS_model1 <- sum((mean(cluster) - cluster)^2) #If data is autoscaled mean(df) = 0
+    df_model1 <- 1
+    RSS_model2 <- sum((scale_matrix(cluster) - cluster)^2)
+    df_model2 <- nrow(cluster) + ncol(cluster) - 1
+    
+    #Calculate F_value
+    F_val <- ((RSS_model1 - RSS_model2) / (df_model2 - df_model1)) / (RSS_model2 / (df_model2))
+    
+    #Calculate p-value
+    p_val <- pf(F_val, df_model2-df_model1, df_model2, lower.tail = FALSE)
+    p_res <- c(p_res, p_val)
+    
+    #Select most significant p_value from the three models
+    res <- c(res, p_res[which.min(p_res)])
+    
+    #SC type identification (still does not work well for constant SCs)
+    if (which.min(p_res)==1){clust_types <- c(clust_types,"constant")}
+    if (which.min(p_res)==2){clust_types <- c(clust_types,"additive")}
+    if (which.min(p_res)==3){clust_types <- c(clust_types,"multiplicative")}
+    
+  }
+  #Print identified SC type
+  cat("a(n)",clust_types[which.min(res)],"SC was found","\n")
+  cluster_type <<- c(cluster_type, clust_types[which.min(res)])
+  return(res)
+}
