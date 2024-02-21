@@ -1,0 +1,389 @@
+# Functions ---------------------------------------------------------------
+
+## Synthetic data ----------------------------------------------------------
+
+#Function to add SC to dataframe in sequential order
+add_clusters <- function(df, cluster_count, cluster_x, cluster_y, signal, signal_noise, randomize = FALSE, type, type_value=2, type_noise=0.5) {
+  
+  #Set up list of SC
+  cluster_list <- vector("list", cluster_count)
+  
+  #Variables
+  seq_x <- 1:nrow(df)
+  seq_y <- 1:ncol(df)
+  row = c(rep(0,cluster_x))
+  
+  for (i in 1:cluster_count) {
+    index_x <- c(1:cluster_x)
+    index_y <- c(1:cluster_y)
+    res = c()
+    
+    ## Constant cluster --------------------------------------------------------
+    if(type == "constant") {
+      res <- rnorm(cluster_x*cluster_y,signal[i],signal_noise)
+    }
+    
+    ## Shifting cluster --------------------------------------------------------
+    if(type == "shift") {
+      row = c(rnorm(cluster_x, signal[i],type_value))
+      for (j in 1:cluster_y) {
+        
+        res = cbind(res, row+rnorm(1,0,type_value))
+      }
+      res <- res + rnorm(length(res),0,signal_noise)
+    }
+    
+    ## Shifting pattern in columns ----------------------------------------------
+    if(type == "shift col") {
+      
+      res = c()
+      row = c(rnorm(cluster_x, signal[i],signal_noise))
+      for (j in 1:cluster_y) {
+        res = cbind(res, row+rnorm(1,type_value[i],type_noise))
+      }
+    }
+    
+    ## Scaling pattern in columns -----------------------------------------------
+    if(type == "scale") {
+      
+      row = signal[i] * abs(rnorm(cluster_x, type_value[i], type_noise))
+      for (j in 1:cluster_y) {
+        res = cbind(res, row*abs(rnorm(1,type_value[i],type_noise)))
+      }
+      res <- res + rnorm(length(res),0,signal_noise)
+    }
+    
+    #Add clusters to dataframe
+    df[c(seq_x[index_x]),c(seq_y[index_y])] <- res
+    
+    #Adding the cluster to the list of clusters
+    cluster_list[[i]] <- df[c(seq_x[index_x]),c(seq_y[index_y])]
+    
+    seq_x <- seq_x[-index_x] #Remove used index
+    seq_y <- seq_y[-index_y] #Remove used index
+  }
+  #Save the list of clusters to global environment
+  cluster_list <<- cluster_list
+  
+  #Randomize dataframe
+  if (randomize == TRUE) {
+    return(df[sample(nrow(df)),sample(ncol(df))])
+  }
+  #Non randomized
+  else{
+    return(df)
+  }
+}
+
+#Function to add overlapping clusters
+add_clusters_overlapping <- function(df, cluster_count, cluster_size, signal, signal_noise, overlapping = TRUE, types, type_value = 2, type_noise=0.5, overlap = 0.5){
+  
+  #Set up list of clusters
+  cluster_list <- vector("list", cluster_count)
+  
+  #Parameters
+  try <- matrix(0,nrow(df),ncol(df))
+  count = 0
+  
+  #Create type vector if not provided
+  if(length(types)==1){
+    types = rep(types,cluster_count)
+  }
+  
+  for (i in 1:cluster_count){
+    #Select cluster type
+    type = types[i]
+    
+    # clusters ---------------------------------------
+    #Create a constant biclusters
+    if(type == "constant") {
+      
+      res <- rnorm(cluster_size^2,signal[i],signal_noise)
+    }
+    #Create a shifted biclusters
+    if(type == "shift") {
+      
+      res = c()
+      row = c(rnorm(cluster_size, signal[i],signal_noise))
+      for (j in 1:cluster_size) {
+        res = cbind(res, row+rnorm(1,type_value[i],type_noise[i]))
+      }
+    }
+    #Create a scaled biclusters
+    if(type == "scale") {
+      
+      res = c()
+      row = c(rnorm(cluster_size, signal[i],signal_noise))
+      for (j in 1:cluster_size) {
+        res = cbind(res, row*rnorm(1,type_value[i],type_noise[i]))
+      }
+    }
+    
+    # overlapping clusters --------------------------------------------------
+    if(overlapping == TRUE) {
+      
+      #Find a cluster that fits in the matrix without overlapping too much with other clusters
+      repeat{
+        count = count + 1
+        x <- sample(2:(100-cluster_size)-1,1)
+        y <- sample(2:(100-cluster_size)-1,1)
+        #Stop if there does not exist a new cluster
+        if(count > 1000){stop("Creating overlapping clusters was not possible with current parameters, try again")}
+        
+        #Stop if the cluster does not exceed overlap parameter
+        if(sum(try[(x-1):(x+cluster_size), (y-1):(y+cluster_size)] %in% 1) < (cluster_size^2 * overlap)){break}
+      }
+      
+      #Mark the location of the generated cluster
+      try[x:(x+cluster_size-1), y:(y+cluster_size-1)] <- 1
+      
+      #Adding the cluster (res) to the data frame
+      df[x:(x+cluster_size-1), y:(y+cluster_size-1)] <- res
+      #Adding the cluster to the list of clusters
+      cluster_list[[i]] <- as.matrix(df[x:(x+cluster_size-1), y:(y+cluster_size-1)])
+    }
+    
+    # non-overlapping clusters ------------------------------------------------
+    if(overlapping == FALSE){
+      
+      #Find a cluster that fits in the matrix without overlapping other clusters
+      repeat{
+        count = count + 1
+        x <- sample(2:(100-cluster_size)-1,1)
+        y <- sample(2:(100-cluster_size)-1,1)
+        #Stop if there does not exist a new cluster
+        if(count > 1000){stop("Creating Non-overlapping clusters was not possible with current parameters, try again")}
+        
+        #Stop if the cluster does not overlap
+        if(!1 %in% try[(x-1):(x+cluster_size), (y-1):(y+cluster_size)]){break}
+      }
+      
+      #Mark the location of the generated cluster
+      try[x:(x+cluster_size-1), y:(y+cluster_size-1)] <- 1
+      
+      #Adding the cluster (res) to the data frame
+      df[x:(x+cluster_size-1), y:(y+cluster_size-1)] <- res
+      #Adding the cluster to the list of clusters
+      cluster_list[[i]] <- as.matrix(df[x:(x+cluster_size-1), y:(y+cluster_size-1)])
+    }
+  }
+  #Save the list of clusters to global environment
+  cluster_list <<- cluster_list
+  
+  #Return the data frame with the added clusters
+  return(df)
+}
+
+#Function to create checkerboard pattern in sequential order
+
+add_checkerboard <- function(df, clusters_x, clusters_y, signal, signal_noise, randomize = FALSE) {
+  
+  #Set up an empty list of clusters
+  cluster_list <- vector("list", clusters_x * clusters_y)
+  count = 0
+  
+  #Setting up the size of the clusters
+  cluster_size_x = nrow(df)/clusters_x
+  cluster_size_y = ncol(df)/clusters_y
+  
+  seq_x <- seq(from = 1, to = nrow(df), by = nrow(df)/clusters_x)
+  seq_y <- seq(from = 1, to = ncol(df), by = ncol(df)/clusters_y)
+  
+  #Loop to create checkerboard pattern in df
+  for (i in 1:clusters_x) {
+    for (j in 1:clusters_y) {
+      
+      df[seq_x[i]:(seq_x[i]+cluster_size_x-1),seq_y[j]:(seq_y[j]+cluster_size_y-1)] <-  
+        df[seq_x[i]:(seq_x[i]+cluster_size_x-1),seq_y[j]:(seq_y[j]+cluster_size_y-1)] + 
+        rnorm(cluster_size_x*cluster_size_y ,signal[i+j],signal_noise) #signal
+      
+      #Count the number of clusters
+      count = count + 1
+      #Adding the cluster to the cluster list
+      cluster_list[[count]] <- as.matrix(df[seq_x[i]:(seq_x[i]+cluster_size_x-1),seq_y[j]:(seq_y[j]+cluster_size_y-1)])
+      
+    } # y loop
+  } # x loop
+  
+  #Save the list of clusters to global environment
+  cluster_list <<- cluster_list
+  
+  #Randomize dataframe
+  if (randomize == TRUE) {
+    return(df[sample(nrow(df)),sample(ncol(df))])
+  }
+  #Non randomized
+  else{
+    return(df)
+  }
+}
+
+
+## Clustering --------------------------------------------------------------
+
+cluster <- function(df) {
+  res <- c()
+  tryCatch({
+    # Plaid --------------------------------------------------------------------
+    invisible(capture.output(result <- biclust(df, method=BCPlaid())))
+    #Function automatically prints result, so I used capture.output
+    
+    #Retrieves biclusters
+    plaid_clusters <- bicluster(df, result)
+    
+    #Calculate cluster error
+    result <- cluster_error(cluster_list, plaid_clusters)
+    
+    res <- c(res,result)
+    
+    # ISA ----------------------------------------------------------------------
+    result <- isa(df)
+    
+    #Set up list of clusters
+    isa_clusters <- vector("list", ncol(result$rows))
+    
+    #Retrieve clusters from isa output
+    for (i in 1: ncol(result$rows)){
+      
+      isa_clusters[[i]] <- df[which(result$rows[,i] > 0),which(result$columns[,i] > 0)]
+    }
+    
+    #Calculate cluster error
+    result <- cluster_error(cluster_list, isa_clusters)
+    
+    res <- c(res,result)
+    
+    # Bimax --------------------------------------------------------------------
+    invisible(capture.output(result <- biclust(binarize(df), method=BCBimax(), minr = 10, minc = 10)))
+    #Function automatically prints result, so I used capture.output
+    
+    #Retrieves biclusters
+    bimax_clusters <- bicluster(df, result)
+    
+    #Calculate cluster error
+    result <- cluster_error(cluster_list, bimax_clusters)
+    
+    res <- c(res,result)
+    
+    
+  }, error=function(error_message){
+    message(error_message)
+  })
+  return(res)
+}
+
+
+
+## Evaluation --------------------------------------------------------------
+
+#Function to calculate cluster error score
+cluster_error <- function(clusters, cluster_result){
+  #Variables
+  CP <- 0
+  CR <- 0
+  
+  for (i in 1:length(clusters)){ #For every known cluster
+    res = c()
+    cluster = clusters[[i]] #Select a cluster
+    
+    for (j in 1:length(cluster_result)){ #For every cluster that was found
+      cluster_res <- as.matrix(as.data.frame(cluster_result[j]))
+      
+      #Calculate percentage similarity with real clusters
+      sim = length(cluster[cluster %in% as.matrix(cluster_res)])/
+        length(cluster)
+      
+      res <- c(res, sim)
+    }
+    
+    #Calculate which cluster shows highest similarity
+    indice <- which.max(res)
+    
+    #Calculate precision
+    precision <- length(cluster_result[[indice]][cluster_result[[indice]] %in% cluster])/
+      length(cluster_result[[indice]])
+    
+    
+    #Calculate recall
+    recall <- length(cluster_result[[indice]][cluster_result[[indice]] %in% cluster])/
+      length(cluster)
+    
+    
+    #Update cluster precision
+    CP <- CP + precision
+    
+    #Update cluster recall
+    CR <- CR + recall
+    
+  }
+  
+  #Calculate average CP
+  CP <- CP/length(clusters)
+  
+  #Calculate average CR
+  CR <- CR/length(clusters)
+  
+  return(c(CP,CR))
+}
+
+#Function to retrieve original clusters from data
+cluster_extract <- function(df, cluster_size, cluster_count){
+  
+  result = vector("list",cluster_count)
+  for (i in 1:cluster_count){
+    index = (cluster_size*i - cluster_size + 1)
+    index_2 = (cluster_size*i)
+    result[[i]] = df[index:index_2, index:index_2]  
+  }
+  return(result)
+}
+
+#Function to calculate Mean Squared Residue (MSR)
+MSR <- function(cluster) {
+  
+  #Define variables before for-loop
+  row_mean <-rowMeans(cluster)
+  col_mean <-colMeans(cluster)
+  mean <- mean(cluster)
+  size_term <- 1/(nrow(cluster)*ncol(cluster))
+  res <- matrix(0,nrow(cluster),ncol(cluster))
+  
+  #Calculate MSR for each position
+  for (i in 1:nrow(cluster)){
+    for (j in 1:ncol(cluster)){
+      res[i,j] <- ((cluster[i,j]-row_mean[i]-col_mean[j]+mean)^2)*size_term
+    }
+  }
+  
+  #Sum MSR
+  result <- sum(res)
+  return(result)
+}
+
+#Function to calculate Scaled Mean Squared Residue (SMSR)
+SMSR <- function(cluster) {
+  
+  #Define variables before for-loop
+  row_mean <-rowMeans(cluster)
+  col_mean <-colMeans(cluster)
+  mean <- mean(cluster)
+  size_term <- 1/(nrow(cluster)*ncol(cluster))
+  res <- matrix(0,nrow(cluster),ncol(cluster))
+  
+  #Calculate SMSR for each position
+  for (i in 1:nrow(cluster)){
+    for (j in 1:ncol(cluster)){
+      res[i,j] <- (1/((col_mean[j]^2)*(row_mean[i])^2))*(((col_mean[j]*row_mean[i])-(cluster[i,j]*mean))^2)*size_term
+    }
+  }
+  
+  #Sum SMSR
+  result <- sum(res)
+  return(result)
+}
+
+
+
+
+
+
